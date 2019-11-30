@@ -11,6 +11,8 @@ terraform {
 
 provider "digitalocean" {
   token = var.do_token
+  spaces_access_id  = var.do_spaces_access_key
+  spaces_secret_key = var.do_spaces_secret_key
 }
 
 // K8S Cluster
@@ -37,10 +39,37 @@ provider "kubernetes" {
 
 // Forall App
 
+resource "digitalocean_database_cluster" "forall" {
+  name = "forall"
+  engine = "pg"
+  version = "11"
+  size = "db-s-1vcpu-1gb"
+  region = var.region
+  node_count = 1
+}
+
+resource "digitalocean_spaces_bucket" "forall" {
+  name = "forall"
+  region = var.spaces_region
+  acl = "public-read"
+}
+
+resource "digitalocean_certificate" "forall_cdn_cert" {
+  name = "forallcdn"
+  type = "lets_encrypt"
+  domains = [var.forall_cdn_domain]
+}
+
 resource "digitalocean_certificate" "forall_cert" {
   name = "forall"
-  type    = "lets_encrypt"
+  type = "lets_encrypt"
   domains = [var.forall_domain]
+}
+
+resource "digitalocean_cdn" "forall" {
+  origin = digitalocean_spaces_bucket.forall.bucket_domain_name
+  custom_domain = var.forall_cdn_domain
+  certificate_id = digitalocean_certificate.forall_cdn_cert.id
 }
 
 resource "kubernetes_namespace" "forall" {
@@ -77,6 +106,84 @@ resource "kubernetes_deployment" "forall" {
         container {
           image = "moonad/forall-server:latest"
           name = "forall"
+
+          port {
+            container_port = 3000
+          }
+
+          readiness_probe {
+            http_get {
+              path = "/health/ready"
+              port = 3000
+            }
+          }
+
+          liveness_probe {
+            http_get {
+              path = "/health/live"
+              port = 3000
+            }
+          }
+
+          env {
+            name = "PUBLIC_HOST"
+            value = var.forall_domain
+          }
+
+          env {
+            name = "PUBLIC_PATH"
+            value = "/"
+          }
+
+          env {
+            name = "PUBLIC_PORT"
+            value = "443"
+          }
+
+          env {
+            name = "PUBLIC_SCHEME"
+            value = "https"
+          }
+
+          env {
+            name = "DATABASE_URL"
+            value = digitalocean_database_cluster.forall.uri
+          }
+
+          env {
+            name = "DATABASE_POOL_SIZE"
+            value = "5"
+          }
+
+          env {
+            name = "BUCKET_ACCESS_KEY"
+            value = var.do_spaces_access_key
+          }
+
+          env {
+            name = "BUCKET_SECRET_KEY"
+            value = var.do_spaces_secret_key
+          }
+
+          env {
+            name = "BUCKET_HOST"
+            value = "${digitalocean_spaces_bucket.forall.region}.digitaloceanspaces.com"
+          }
+
+          env {
+            name = "BUCKET_PORT"
+            value = "443"
+          }
+
+          env {
+            name = "BUCKET_NAME"
+            value = digitalocean_spaces_bucket.forall.name
+          }
+
+          env {
+            name = "BUCKET_SCHEME"
+            value = "https://"
+          }
         }
       }
     }
