@@ -13,10 +13,10 @@ provider "digitalocean" {
   token = var.do_token
 }
 
-// Forall.fm Records
-resource "digitalocean_record" "forall_naked" {
-  domain = "forall.fm"
+// Bitlog.fm Records
+resource "digitalocean_record" "bitlog_naked" {
+  domain = "bitlog.fm"
   type = "A"
   name = "@"
-  value = var.forall_prod_ip
+  value = var.bitlog_prod_ip
 }

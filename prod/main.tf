@@ -11,8 +11,6 @@ terraform {
 
 provider "digitalocean" {
   token = var.do_token
-  spaces_access_id  = var.do_spaces_access_key
-  spaces_secret_key = var.do_spaces_secret_key
 }
 
 // K8S Cluster
@@ -37,53 +35,34 @@ provider "kubernetes" {
   )
 }
 
-// Forall App
+// Bitlog App
 
-resource "digitalocean_database_cluster" "forall" {
-  name = "forall"
-  engine = "pg"
-  version = "11"
+resource "digitalocean_certificate" "bitlog_cert" {
+  name = "bitlog"
+  type = "lets_encrypt"
+  domains = [var.bitlog_domain]
+}
+
+resource "digitalocean_database_cluster" "bitlog" {
+  name = "bitlog"
+  engine = "redis"
   size = "db-s-1vcpu-1gb"
   region = var.region
   node_count = 1
 }
 
-resource "digitalocean_spaces_bucket" "forall" {
-  name = "forall"
-  region = var.spaces_region
-  acl = "public-read"
-}
-
-resource "digitalocean_certificate" "forall_cdn_cert" {
-  name = "forallcdn"
-  type = "lets_encrypt"
-  domains = [var.forall_cdn_domain]
-}
-
-resource "digitalocean_certificate" "forall_cert" {
-  name = "forall"
-  type = "lets_encrypt"
-  domains = [var.forall_domain]
-}
-
-resource "digitalocean_cdn" "forall" {
-  origin = digitalocean_spaces_bucket.forall.bucket_domain_name
-  custom_domain = var.forall_cdn_domain
-  certificate_id = digitalocean_certificate.forall_cdn_cert.id
-}
-
-resource "kubernetes_namespace" "forall" {
+resource "kubernetes_namespace" "bitlog" {
   metadata {
-    name = "forall-server"
+    name = "bitlog-server"
   }
 }
 
-resource "kubernetes_deployment" "forall" {
+resource "kubernetes_deployment" "bitlog" {
   metadata {
-    name = "forall-server"
-    namespace = "forall-server"
+    name = "bitlog-server"
+    namespace = "bitlog-server"
     labels = {
-      app = "forall-server"
+      app = "bitlog-server"
     }
   }
 
@@ -92,97 +71,62 @@ resource "kubernetes_deployment" "forall" {
 
     selector {
       match_labels = {
-        app = "forall-server"
+        app = "bitlog-server"
       }
     }
 
     template {
       metadata {
         labels = {
-          app = "forall-server"
+          app = "bitlog-server"
         }
       }
       spec {
         container {
-          image = "moonad/forall-server:latest"
-          name = "forall"
+          image = "moonad/bitlog-server:latest"
+          name = "bitlog"
 
           port {
-            container_port = 3000
-          }
-
-          readiness_probe {
-            http_get {
-              path = "/health/ready"
-              port = 3000
-            }
-          }
-
-          liveness_probe {
-            http_get {
-              path = "/health/live"
-              port = 3000
-            }
+            container_port = 8000
           }
 
           env {
-            name = "PUBLIC_HOST"
-            value = var.forall_domain
+            name = "ROCKET_DATABASES"
+            value = "{redis_db={url=\"redis://${digitalocean_database_cluster.bitlog.user}:${digitalocean_database_cluster.bitlog.password}@localhost:6379/\"}}"
           }
 
           env {
-            name = "PUBLIC_PATH"
-            value = "/"
+            name = "ROCKET_SECRET_KEY"
+            value = var.bitlog_secret_key
+          }
+        }
+
+        container {
+          image = "bamorim/stunnel"
+          name = "stunnel"
+
+          port {
+            container_port = 6379
           }
 
           env {
-            name = "PUBLIC_PORT"
-            value = "443"
+            name = "CLIENT"
+            value = "yes"
           }
 
           env {
-            name = "PUBLIC_SCHEME"
-            value = "https"
+            name = "SERVICE"
+            value = "redis"
           }
-
+          
           env {
-            name = "DATABASE_URL"
-            value = digitalocean_database_cluster.forall.uri
+            name = "ACCEPT"
+            value = "6379"
           }
-
+          
           env {
-            name = "DATABASE_POOL_SIZE"
-            value = "5"
-          }
-
-          env {
-            name = "BUCKET_ACCESS_KEY"
-            value = var.do_spaces_access_key
-          }
-
-          env {
-            name = "BUCKET_SECRET_KEY"
-            value = var.do_spaces_secret_key
-          }
-
-          env {
-            name = "BUCKET_HOST"
-            value = "${digitalocean_spaces_bucket.forall.region}.digitaloceanspaces.com"
-          }
-
-          env {
-            name = "BUCKET_PORT"
-            value = "443"
-          }
-
-          env {
-            name = "BUCKET_NAME"
-            value = digitalocean_spaces_bucket.forall.name
-          }
-
-          env {
-            name = "BUCKET_SCHEME"
-            value = "https://"
+            name = "CONNECT"
+            value = "${digitalocean_database_cluster.bitlog.private_host}:${digitalocean_database_cluster.bitlog.port}"
           }
         }
       }
@@ -190,42 +134,42 @@ resource "kubernetes_deployment" "forall" {
   }
 }
 
-resource "kubernetes_service" "forall" {
+resource "kubernetes_service" "bitlog" {
   lifecycle {
     ignore_changes = [metadata[0].annotations["kubernetes.digitalocean.com/load-balancer-id"]]
   }
   metadata {
-    name = "forall"
-    namespace = "forall-server"
+    name = "bitlog"
+    namespace = "bitlog-server"
     labels = {
-      app = "forall-server"
+      app = "bitlog-server"
     }
     annotations = {
       "kubernetes.digitalocean.com/load-balancer-id" = "placeholder"
       "service.beta.kubernetes.io/do-loadbalancer-protocol" = "http"
       "service.beta.kubernetes.io/do-loadbalancer-algorithm" = "round_robin"
       "service.beta.kubernetes.io/do-loadbalancer-tls-ports" = "443"
-      "service.beta.kubernetes.io/do-loadbalancer-certificate-id" = digitalocean_certificate.forall_cert.id
-      "service.beta.kubernetes.io/do-loadbalancer-hostname" = var.forall_domain
+      "service.beta.kubernetes.io/do-loadbalancer-certificate-id" = digitalocean_certificate.bitlog_cert.id
+      "service.beta.kubernetes.io/do-loadbalancer-hostname" = var.bitlog_domain
       "service.beta.kubernetes.io/do-loadbalancer-redirect-http-to-https" = "true"
     }
   }
 
   spec {
     selector = {
-      app = "forall-server"
+      app = "bitlog-server"
     }
 
     port {
       name = "http"
       port = 80
-      target_port = 3000
+      target_port = 8000
     }
 
     port {
       name = "https"
       port = 443
-      target_port = 3000
+      target_port = 8000
     }
 
     type = "LoadBalancer"
