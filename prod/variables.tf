@@ -13,3 +13,7 @@ variable "bitlog_secret_key" {
 variable "bitlog_domain" {
   description = "domain to host bitlog from"
 }
+
+variable "forall_domain" {
+  description = "Domain/Subdomain on which forall is exposed"
+}

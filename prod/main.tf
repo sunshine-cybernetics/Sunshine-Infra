@@ -118,12 +118,12 @@ resource "kubernetes_deployment" "bitlog" {
             name = "SERVICE"
             value = "redis"
           }
-          
+
           env {
             name = "ACCEPT"
             value = "6379"
           }
-          
+
           env {
             name = "CONNECT"
             value = "${digitalocean_database_cluster.bitlog.private_host}:${digitalocean_database_cluster.bitlog.port}"
@@ -170,6 +170,122 @@ resource "kubernetes_service" "bitlog" {
       name = "https"
       port = 443
       target_port = 8000
+    }
+
+    type = "LoadBalancer"
+  }
+}
+
+// Forall App
+
+resource "digitalocean_certificate" "forall_cert" {
+  name = "forall"
+  type = "lets_encrypt"
+  domains = [var.forall_domain]
+}
+
+resource "kubernetes_namespace" "forall" {
+  metadata {
+    name = "forall-server"
+  }
+}
+
+resource "kubernetes_deployment" "forall" {
+  metadata {
+    name = "forall-server"
+    namespace = "forall-server"
+    labels = {
+      app = "forall-server"
+    }
+  }
+
+  spec {
+    replicas = 1
+
+    selector {
+      match_labels = {
+        app = "forall-server"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          app = "forall-server"
+        }
+      }
+      spec {
+        container {
+          image = "moonad/formbase:latest"
+          name = "forall"
+
+          port {
+            container_port = 80
+          }
+
+          readiness_probe {
+            http_get {
+              path = "/health/ready"
+              port = 80
+            }
+            period_seconds = 3
+          }
+
+          liveness_probe {
+            http_get {
+              path = "/health/alive"
+              port = 80
+            }
+            initial_delay_seconds = 10
+            period_seconds = 5
+          }
+
+          env {
+            name = "SHUTDOWN_DELAY"
+            value = "4500" // 25% on top of readiness check
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service" "forall" {
+  lifecycle {
+    ignore_changes = [metadata[0].annotations["kubernetes.digitalocean.com/load-balancer-id"]]
+  }
+  metadata {
+    name = "forall"
+    namespace = "forall-server"
+    labels = {
+      app = "forall-server"
+    }
+    annotations = {
+      "kubernetes.digitalocean.com/load-balancer-id" = "placeholder"
+      "service.beta.kubernetes.io/do-loadbalancer-protocol" = "http"
+      "service.beta.kubernetes.io/do-loadbalancer-algorithm" = "round_robin"
+      "service.beta.kubernetes.io/do-loadbalancer-tls-ports" = "443"
+      "service.beta.kubernetes.io/do-loadbalancer-certificate-id" = digitalocean_certificate.forall_cert.id
+      "service.beta.kubernetes.io/do-loadbalancer-hostname" = var.forall_domain
+      "service.beta.kubernetes.io/do-loadbalancer-redirect-http-to-https" = "true"
+    }
+  }
+
+  spec {
+    selector = {
+      app = "forall-server"
+    }
+
+    port {
+      name = "http"
+      port = 80
+      target_port = 80
+    }
+
+    port {
+      name = "https"
+      port = 443
+      target_port = 80
     }
 
     type = "LoadBalancer"
