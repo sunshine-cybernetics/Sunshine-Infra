@@ -190,6 +190,23 @@ resource "kubernetes_namespace" "forall" {
   }
 }
 
+resource "kubernetes_persistent_volume_claim" "forall" {
+  metadata {
+    name = "forall-server"
+    namespace = "forall-server"
+  }
+
+  spec {
+    access_modes = ["ReadWriteOnce"]
+    resources {
+      requests = {
+        storage = "5Gi"
+      }
+    }
+    storage_class_name = "do-block-storage"
+  }
+}
+
 resource "kubernetes_deployment" "forall" {
   metadata {
     name = "forall-server"
@@ -219,6 +236,11 @@ resource "kubernetes_deployment" "forall" {
           image = "moonad/formbase:latest"
           name = "forall"
 
+          volume_mount {
+            mount_path = "/app/fm"
+            name = "files-volume"
+          }
+
           port {
             container_port = 80
           }
@@ -243,6 +265,12 @@ resource "kubernetes_deployment" "forall" {
           env {
             name = "SHUTDOWN_DELAY"
             value = "4500" // 25% on top of readiness check
+          }
+        }
+        volume {
+          name = "files-volume"
+          persistent_volume_claim {
+            claim_name = "forall-server"
           }
         }
       }
